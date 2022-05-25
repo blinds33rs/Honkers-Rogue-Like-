@@ -10,8 +10,10 @@ const LEVEL_SIZES =  [
 	Vector2(50,50),
 ]
 
-const LEVEL_ROOM_COUNTS = [5, 7, 9, 12, 15]
-const LEVEL_ENEMY_COUNTS = [5,10,15,20.25]
+const LEVEL_ROOM_COUNTS = [5, 6, 8, 11, 15]
+const LEVEL_ENEMY_COUNTS = [4, 8, 14, 18, 24]
+const LEVEL_HEAL_COUNTS = [1, 2 , 3 , 4, 5]
+const LEVEL_STATUS_COUNTS = [2, 4 , 7 , 9, 12]
 const MIN_ROOM_DIMENSION = 5
 const MAX_ROOM_DIMENSION = 8
 const PLAYER_START_HP = 10
@@ -19,7 +21,52 @@ const PLAYER_START_HP = 10
 enum Tile {Wall, Door, Floor, Stairs, Stone, Grave}
 
 const EnemyScene = preload("res://Enemy.tscn")
+const Enemy1Scene = preload("res://Enemy1.tscn")
+const EnemyPoisonScene = preload("res://EnemyPoison.tscn")
+const EnemyVisionScene = preload("res://EnemyVision.tscn")
 
+const Heal = preload("res://Heal.tscn")
+const FullHeal = preload("res://FullHeal.tscn")
+const Antidote = preload("res://Antidote.tscn")
+const Glasses = preload("res://Glasses.tscn")
+
+#const ENEMY_TYPES = ["honker, brown_honker, blind_honker, poison_honker"]
+const STATUS_FUNCTIONS = ["heal", "full_heal", "poison", "blinded"]
+
+class Item extends Reference:
+	var sprite_node
+	var tile
+	var is_heal
+	var is_fullheal
+	var is_blind
+	var is_antidote
+	
+	func _init(game, x, y, is_heal):
+		self.is_heal = is_heal
+		tile = Vector2(x, y)
+		sprite_node = Heal.instance() if is_heal else FullHeal.instance()
+		sprite_node.frame = randi() % sprite_node.hframes
+		sprite_node.position = tile * TILE_SIZE
+		sprite_node.offset = Vector2(randi() % 12 - 6, randi() % 12 - 6)
+		game.add_child(sprite_node)
+		
+		self.is_antidote = is_antidote
+		tile = Vector2(x, y)
+		sprite_node = Heal.instance() if is_antidote else Glasses.instance()
+		sprite_node.frame = randi() % sprite_node.hframes
+		sprite_node.position = tile * TILE_SIZE
+		sprite_node.offset = Vector2(randi() % 12 - 6, randi() % 12 - 6)
+		game.add_child(sprite_node)
+		
+	#var sprite_node
+	#var tile
+		
+	func remove():
+		sprite_node.queue_free()
+
+#class ItemAntidote extends Reference:
+	
+	
 class Enemy extends Reference:
 	var sprite_node
 	var tile
@@ -44,13 +91,24 @@ class Enemy extends Reference:
 			return
 			
 		hp = max(0, hp - dmg)
-		sprite_node.get_node("HP").rect_size.x = TILE_SIZE * hp / full_hp
+		#sprite_node.get_node("HP").rect_size.x = TILE_SIZE * hp / full_hp
 		
 		if hp == 0:
 			dead = true
 			game.score += 10 * full_hp
 			
+			#Drop HP Heal
+			for _i in range(randi() % (full_hp)):
+				game.items.append(Item.new(game, tile.x, tile.y, true))
+			
+			#Drop Status Heals
+			for _i in range(randi() % 3):
+				game.items.append(Item.new(game, tile.x, tile.y, true))
+					
 	func act(game):
+		if !sprite_node.visible:
+			return
+		
 		var my_point = game.enemy_pathfinding.get_closest_point(Vector3(tile.x, tile.y, 0))
 		var player_point = game.enemy_pathfinding.get_closest_point(Vector3(game.player_tile.x, game.player_tile.y, 0))
 		var path = game.enemy_pathfinding.get_point_path(my_point, player_point)
@@ -60,6 +118,17 @@ class Enemy extends Reference:
 			
 			if move_tile == game.player_tile:
 				game.damage_player(1)
+				
+	#ELIF decided to account for enemy not occupying stare tile
+			elif move_tile == game.player_tile:
+				var stair_blocked = false
+				for enemy in game.enemies:
+					if enemy.tile == move_tile:
+						stair_blocked = true
+						break
+				if !stair_blocked:
+					tile = move_tile
+				
 			else:
 				var blocked = false
 				for enemy in game.enemies:
@@ -76,6 +145,8 @@ var map = []
 var rooms = []
 var level_size
 var enemies = []
+var items = []
+var item_types
 
 #Node Refrences ----------------------
 
@@ -90,6 +161,10 @@ var player_tile
 var score = 0
 var enemy_pathfinding
 var player_hp = PLAYER_START_HP
+var heal_turns = 0
+var fullheal_turns = 0
+var blinded_turns = 0
+var poison_turns = 0
 
 
 func _ready():
@@ -131,14 +206,12 @@ func try_move(dx, dy):
 					break
 			if !blocked:	
 				player_tile = Vector2(x, y)
+				pickup_items()
 				
 				
 		Tile.Door:
 			set_tile(x, y, Tile.Floor)
-			
-		Tile.Door:
-			set_tile(x, y, Tile.Floor)
-			
+		
 		Tile.Stairs:
 			level_num += 1
 			score += 20
@@ -147,11 +220,105 @@ func try_move(dx, dy):
 			else:
 				score += 1000
 				$CanvasLayer/Win.visible = true
+		
+		Tile.Grave:
+			set_tile(x, y, Tile.Grave)
+			
 			
 	for enemy in enemies:
 		enemy.act(self)
+		
+	if blinded_turns > 0:
+		blinded_turns -= 1
+		if blinded_turns == 0:
+			$CanvasLayer/Blinded.visible = false
+			$Player/Antidote.visible = false
+			
+	if poison_turns > 0:
+		poison_turns -= 1
+		damage_player(1)
+		if poison_turns == 0:
+			$CanvasLayer/Poisoned.visible = false
+			$Player/Poisoned.visible = false
+	if heal_turns > 0:
+		heal_turns -= 1
+		player_hp += 4
+		if heal_turns == 0:
+			$CanvasLayer/Healed.visible = false
+			$Player/Healed.visible = false
+			
+	if fullheal_turns > 0:
+		fullheal_turns -= 1
+		player_hp += 10
+		if fullheal_turns  == 0:
+			$CanvasLayer/FullHealed.visible = false
+			$Player/FullHealed.visible = false		
 			
 	call_deferred("update_visuals")
+	
+func pickup_items():
+	var remove_queue = []
+	for item in items:
+			if item.tile == player_tile:
+				if item.is_heal:
+					player_hp += 4
+					score += 4
+			
+				else:
+					call(item_types[item.sprite_node.frame])
+				item.remove()
+				remove_queue.append(item)
+				
+			if item.tile == player_tile:		
+				if item.is_fullheal:
+					player_hp += 10
+					score += 10
+					
+				else:
+					call(item_types[item.sprite_node.frame])
+				item.remove()
+				remove_queue.append(item)
+					
+					
+			if item.tile == player_tile:		
+				if item.is_antidote:
+					score += 2
+				else:
+					call(item_types[item.sprite_node.frame])
+				item.remove()
+				remove_queue.append(item)
+				
+			if item.tile == player_tile:		
+				if item.is_glasses:
+					score += 2
+				
+				else:
+					call(item_types[item.sprite_node.frame])
+				item.remove()
+				remove_queue.append(item)
+		
+	for item in remove_queue:
+		items.erase(item)
+
+func healed():
+	heal_turns = 1
+	$CanvasLayer/Healed.visible = true
+	$Player/Healed.visibile = true
+
+func full_healed():
+	heal_turns = 1
+	$CanvasLayer/FullHealed.visible = true
+	$Player/FullHealed.visible = true
+			
+func blinded():
+	blinded_turns = 10
+	$CanvasLayer/Blinded.visible = true
+	$Player/Blind.visible = true
+
+func poisoned():
+	poison_turns  = 3
+	$CanvasLayer/Poisoned.visible = true
+	$Player/Poisoned.visible = true
 
 func build_level():
 	# Start with a blank map
@@ -164,7 +331,18 @@ func build_level():
 			enemy.remove()
 	enemies.clear()
 	
+	for item in items:
+		item.remove()
+	items.clear()
+	
 	enemy_pathfinding = AStar.new()
+	
+	#Randomize Effects
+	
+	item_types = STATUS_FUNCTIONS.duplicate()
+	#Randomizes Order of spawn
+	item_types.shuffle()
+	
 	
 	level_size = LEVEL_SIZES[level_num]
 	for x in range(level_size.x):
@@ -176,7 +354,7 @@ func build_level():
 
 	var free_regions = [Rect2(Vector2(2, 2), level_size - Vector2(4, 4))]
 	var num_rooms = LEVEL_ROOM_COUNTS[level_num]
-	for i in range(num_rooms):
+	for _i in range(num_rooms):
 		add_room(free_regions)
 		if free_regions.empty():
 			break
@@ -193,7 +371,7 @@ func build_level():
 	
 	#Enemy Placement
 	var num_enemies = LEVEL_ENEMY_COUNTS[level_num]
-	for i in range(num_enemies):
+	for _i in range(num_enemies):
 		var room = rooms[1 + randi() % (rooms.size() - 1)]
 		var x = room.position.x + 1 + randi() % int(room.size.x - 2)
 		var y = room.position.y + 1 + randi() % int(room.size.y - 2)
@@ -203,11 +381,29 @@ func build_level():
 			if enemy.tile.x == x && enemy.tile.y == y:
 				blocked = true
 				break
+			
 				
 		if !blocked:
 			var enemy = Enemy.new(self, randi() % 2, x, y)
 			enemies.append(enemy)
-			
+	
+	#Item Placement
+	
+	var num_items = LEVEL_HEAL_COUNTS[level_num]
+	for _i in range(num_items):
+		var room = rooms[randi() % (rooms.size())]
+		var x = room.position.x + 1 + randi() % int(room.size.x - 2)
+		var y = room.position.y + 1 + randi() % int(room.size.y - 2)
+		items.append(Item.new(self, x, y, randi() % 2 == 0))
+		
+	var num_status= LEVEL_STATUS_COUNTS[level_num]
+	for _i in range(num_status):
+		var room = rooms[randi() % (rooms.size())]
+		var x = room.position.x + 1 + randi() % int(room.size.x - 2)
+		var y = room.position.y + 1 + randi() % int(room.size.y - 2)
+		items.append(Item.new(self, x, y, randi() % 2 == 0))
+	
+	
 	call_deferred("update_visuals")
 			
 	#Place Stairs
@@ -254,6 +450,19 @@ func update_visuals():
 	
 	for enemy in enemies:
 		enemy.sprite_node.position = enemy.tile * TILE_SIZE
+		if !enemy.sprite_node.visible:
+			var enemy_center = tile_to_pixel_center(enemy.tile.x, enemy.tile.y)
+			var occlusion = space_state.intersect_ray(player_center, enemy_center)
+			if !occlusion:
+				enemy.sprite_node.visible = true
+				
+	for item in items:
+		item.sprite_node.position = item.tile * TILE_SIZE
+		if !item.sprite_node.visible:
+			var item_center = tile_to_pixel_center(item.tile.x, item.tile.y)
+			var occlusion = space_state.intersect_ray(player_center, item_center)
+			if !occlusion:
+				item.sprite_node.visible = true
 					
 	$CanvasLayer/HP.text = "HP: " + str(player_hp)
 	$CanvasLayer/Score.text = "Score: " + str(score)
@@ -473,7 +682,8 @@ func set_tile(x, y, type):
 		
 func damage_player(dmg):
 	player_hp = max(0, player_hp - dmg)
-	if player_hp == 0: 
+	if player_hp == 0:
+		#Tile.Grave (Code Grave Replacement/Place Grave Tile upon player coord, remove char sprite)
 		$CanvasLayer/Lose.visible = true
 
 func _on_Button_pressed():
@@ -483,9 +693,12 @@ func _on_Button_pressed():
 	$CanvasLayer/Win.visible = false
 	$CanvasLayer/Lose.visible = false
 	player_hp = PLAYER_START_HP
-
-
-	#$Player/Impairment.visible = false
-	#$CanvasLayer/Impaired.visible = false
-	#$CanvasLayer/Healing.visible = false
-	#$CanvasLayer/Poisoned.visible = false
+#Status Reset
+	heal_turns = 0
+	fullheal_turns = 0
+	blinded_turns = 0
+	blinded_turns = 0
+	$CanvasLayer/Blinded.visible = false
+	$CanvasLayer/FullHealed.visible = false
+	$CanvasLayer/Healed.visible = false
+	$CanvasLayer/Poisoned.visible = false

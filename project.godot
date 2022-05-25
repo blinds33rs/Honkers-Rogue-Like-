@@ -10,7 +10,7 @@ config_version=4
 
 [application]
 
-config/name="Roguelike"
+config/name="Vengeance of the Honkers!"
 run/main_scene="res://Game.tscn"
 config/icon="res://icon.png"
 
